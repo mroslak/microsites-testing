@@ -379,12 +379,14 @@
         box-sizing: border-box;
       }
 
-      .cta-btn.is-focused .cta-btn-bg {
+      .cta-btn.is-focused .cta-btn-bg,
+      .cta-btn.selected .cta-btn-bg {
         background: #fff;
         box-shadow: 0 7.56px 8.64px rgba(0, 0, 0, 0.7);
       }
 
-      .cta-btn.is-focused .cta-btn-label {
+      .cta-btn.is-focused .cta-btn-label,
+      .cta-btn.selected .cta-btn-label {
         font-family: var(--font-body);
         font-weight: 700;
         font-size: 32.4px;
@@ -570,7 +572,7 @@
 
   <script>
     var DEBUG = false;
-    var payload = {"background":{"image1920x1080":"","image3840x2160":"","image1280x720":""},"videos":[],"apps":[],"tracking":[{"pageViewTracker":"","exitTrackerBase":""}],"tracking3p":{"impressionTrackers":[],"exitTracker":""},"fastSpeed":10,"micrositeId":1,"deliveryHost":"rtb-canary.adgrx.com","qrcode":{},"emailCta":{"button_text":"Email Us","action_text":"Sign in to your Samsung account to get this offer by email.","confirmation_headline":"Send offer to my email","confirmation_body":"We will send this special discount to your email: ","email_notification_headline":"Discount sent to email","email_notification_body":"The deal was sent to your connected email: ","legal_disclaimer":"The contents of this ad and links shared via email are not affiliated with Samsung.","color_mode":"light","email_setting":{"subject":"Special discount just for you!","headline":"Special discount just for you!","body_text":"\u003cp\u003eEnjoy this discount\u003c/p\u003e","cta_text":"Send","cta_url":"https://example.com"}}};
+    var payload = {"background":{"image1920x1080":"","image3840x2160":"","image1280x720":""},"videos":[],"apps":[],"tracking":[{"pageViewTracker":"","exitTrackerBase":""}],"tracking3p":{"impressionTrackers":[],"exitTracker":""},"fastSpeed":10,"micrositeId":1,"deliveryHost":"rtb-canary.adgrx.com","qrcode":{},"emailCta":{"button_text":"Email Us","action_text":"Sign in to your Samsung account to get this offer by email.","confirmation_headline":"Send offer to my email","confirmation_body":"We will send this special discount to your email: ","email_notification_headline":"Discount sent to email","email_notification_body":"The deal was sent to your connected email: ","legal_disclaimer":"The contents of this ad and links shared via email are not affiliated with Samsung.","color_mode":"light"}};
   </script>
 
   <script>
@@ -3865,12 +3867,6 @@ var MicrositeUserInput = (function () {
  *     convention as the QR code section's (separate "email-cta-" prefixed
  *     class so both sections could coexist without clashing, even though in
  *     practice a microsite has one or the other).
- *   email_setting: the *email's own* content (subject/headline/body_text/
- *     cta_text/cta_url) — not rendered on this page (the viewer never sees
- *     the email itself here, only requests it), but stashed as data-*
- *     attributes on the card for testability/debugging, mirroring
- *     _qr_code.js's data-scans-url convention, so nothing from the payload
- *     is silently dropped.
  *
  * Container bridge (ad-agent iframe parent, via window.postMessage):
  *   -> {"getSsoState":""}                          <- {type:"ssoState", bLogin, maskedEmail}
@@ -3900,6 +3896,9 @@ var MicrositeUserInput = (function () {
   }
 
   var SEND_EMAIL_REPLY_TIMEOUT_MS = 30000;
+
+  // data-section of the card; MicrositeNav tracks focus under this name.
+  var CTA_SECTION = "email-cta";
 
   var FALLBACK_TEXT = {
     FAILED_TITLE: "Could not send the offer",
@@ -3939,18 +3938,11 @@ var MicrositeUserInput = (function () {
     card.id = "emailCtaCard";
     card.className = "is-hidden";
     card.setAttribute("data-section", "email-cta");
-    // email_setting fields (see header comment above) — data-* only, no on-page rendering.
-    var setting = emailCta.email_setting || {};
-    card.setAttribute("data-email-subject", setting.subject || "");
-    card.setAttribute("data-email-headline", setting.headline || "");
-    card.setAttribute("data-email-body-text", setting.body_text || "");
-    card.setAttribute("data-email-cta-text", setting.cta_text || "");
-    card.setAttribute("data-email-cta-url", setting.cta_url || "");
 
     var button = document.createElement("div");
     button.id = "emailCtaButton";
     button.setAttribute("role", "button");
-    button.className = "cta-btn is-focused";
+    button.className = "cta-btn is-normal";
     var buttonBg = document.createElement("div");
     buttonBg.className = "cta-btn-bg";
     var buttonLabel = document.createElement("div");
@@ -4002,7 +3994,7 @@ var MicrositeUserInput = (function () {
     sendBg.className = "cta-btn-bg";
     var sendLabel = document.createElement("div");
     sendLabel.className = "cta-btn-label";
-    sendLabel.textContent = (emailCta.email_setting && emailCta.email_setting.cta_text) || "Send";
+    sendLabel.textContent = "Send";
     sendBtn.appendChild(sendBg);
     sendBtn.appendChild(sendLabel);
 
@@ -4104,7 +4096,7 @@ var MicrositeUserInput = (function () {
       if (n === 1) {
         setVisible(popup, false);
         setVisible(notification, false);
-        setBtnState(button, "focused");
+        setBtnState(button, "normal");
       } else if (n === 2) {
         setVisible(notification, false);
         setVisible(popup, true);
@@ -4184,6 +4176,7 @@ var MicrositeUserInput = (function () {
       var disclaimer = $("emailCtaLegalDisclaimer");
       if (disclaimer) setVisible(disclaimer, true);
       goToStep(1);
+      joinNavigation();
     }
 
     function onMessage(event) {
@@ -4217,12 +4210,51 @@ var MicrositeUserInput = (function () {
     var KEY_DEDUPE_WINDOW_MS = 50;
     var lastKey = { keyCode: null, time: -Infinity };
 
-    // Enter belongs to the template's own sections (videos/apps/player) while the
-    // focus sits on one of them; otherwise the CTA is the only thing to activate.
-    function ctaOwnsEnter() {
+    // null: the page has no MicrositeNav at all; undefined: its map is not built yet.
+    function currentNavSection() {
       var nav = window.$SAMSUNG && window.$SAMSUNG.MicrositeNav;
-      var section = nav && nav.getCurrentSection ? nav.getCurrentSection() : "";
-      return ["videos", "apps", "controls", "video"].indexOf(section) < 0;
+      if (!nav) return null;
+      try {
+        return nav.getCurrentSection();
+      } catch (e) {
+        return undefined;
+      }
+    }
+
+    // Enter is claimed only while the nav's focus is on the CTA itself. Anywhere
+    // else (the exit button, a video, an app) it is left to the template's handler.
+    function ctaOwnsEnter() {
+      var section = currentNavSection();
+      return section === null || section === CTA_SECTION;
+    }
+
+    // The card is added to the nav map only once it is visible. Before that its
+    // button is not navigable, so MicrositeNav skips the (empty) section and a
+    // signed-out viewer can never land on something they cannot see.
+    function joinNavigation() {
+      var nav = window.$SAMSUNG && window.$SAMSUNG.MicrositeNav;
+      if (!nav) return;
+
+      function apply() {
+        // On a page with videos or apps the template's own default focus is
+        // meaningful; take the focus only when it would otherwise rest on exit.
+        var before = nav.getCurrentSection();
+        var takeFocus = !before || before === "exit" || before === CTA_SECTION;
+
+        $("emailCtaButton").classList.add("navigable");
+        nav.createNavMap(document.querySelector(".microsite"));
+        if (takeFocus) nav.shiftFocusTo(CTA_SECTION);
+      }
+
+      // createNavMap runs from window.onload; wait until after it, so the map is
+      // rebuilt on top of the template's own and the default focus (exit) is replaced.
+      if (document.readyState === "complete") {
+        setTimeout(apply, 0);
+      } else {
+        window.addEventListener("load", function () {
+          setTimeout(apply, 0);
+        });
+      }
     }
 
     function isArrow(keyCode) {
@@ -4235,16 +4267,19 @@ var MicrositeUserInput = (function () {
     }
 
     // Registered in the capture phase so a consumed key is stopped before the
-    // template's <body onKeyDown> handler sees it — that handler would otherwise
-    // also act on Enter (closing the microsite via the focused exit button).
+    // template's <body onKeyDown> handler sees it. While the CTA is the focused
+    // section that handler has no branch for it, but while the popup is open it
+    // must not move focus behind the popup or act on Enter.
     function onKeyDown(event) {
       if (step === 0) return;
 
       var keyCode = (event || window.event).keyCode;
       var popupOpen = step === 2;
+      // Enter is claimed only when the CTA will act on it: to open the popup (entry
+      // step, CTA focused) or inside the popup. After a send (step 3) it is left alone.
       var consume =
         (popupOpen && (isArrow(keyCode) || has(KeyCodes.ENTER, keyCode) || has(KeyCodes.RETURN, keyCode))) ||
-        (!popupOpen && has(KeyCodes.ENTER, keyCode) && ctaOwnsEnter());
+        (step === 1 && has(KeyCodes.ENTER, keyCode) && ctaOwnsEnter());
 
       // Arrows must never scroll the page, whoever ends up handling them.
       if (consume || isArrow(keyCode)) event.preventDefault();
@@ -4297,6 +4332,6 @@ var MicrositeUserInput = (function () {
   #tvBuildBadge { position: absolute; top: 8px; left: 8px; z-index: 99999; padding: 6px 12px;
     background: #ffd400; color: #000; font: 700 22px/1.2 monospace; border-radius: 6px; }
 </style>
-<div id="tvBuildBadge">TV BUILD 15:00:56 / cta-js 3314bd</div>
+<div id="tvBuildBadge">TV BUILD 10:34:58 / cta-js ad8050</div>
 </body>
 </html>
